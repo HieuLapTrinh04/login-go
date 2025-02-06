@@ -37,7 +37,7 @@ func main() {
 
 	// Bật CORS Middleware
 	corsHandler := cors.New(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:3000"}, // Cho phép React frontend
+		AllowedOrigins:   []string{"*"}, // Cho phép React frontend
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Content-Type", "Authorization"},
 		AllowCredentials: true,
