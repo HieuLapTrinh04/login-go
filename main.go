@@ -2,113 +2,128 @@ package main
 
 import (
 	"database/sql"
-	"fmt"
-	"html/template"
+	"encoding/json"
 	"log"
 	"net/http"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/gorilla/mux"
+	"github.com/rs/cors"
 	"golang.org/x/crypto/bcrypt"
 )
 
 var db *sql.DB
-var tmpl *template.Template
 
 func init() {
-	// Kết nối MySQL
 	var err error
 	db, err = sql.Open("mysql", "root:Minhhieu11012004@tcp(localhost:3306)/user")
 	if err != nil {
 		log.Fatal("Failed to connect to database:", err)
 	}
 
-	// Kiểm tra kết nối
 	err = db.Ping()
 	if err != nil {
 		log.Fatal("Database not reachable:", err)
 	}
-
-	// Tải các file HTML template
-	tmpl = template.Must(template.ParseGlob("templates/*.html"))
 }
 
 func main() {
-	http.HandleFunc("/", loginForm)
-	http.HandleFunc("/login", loginHandler)
-	http.HandleFunc("/register", registerForm)
-	http.HandleFunc("/registerSubmit", registerHandler)
-	log.Println("Server started at http://localhost:8080")
-	http.ListenAndServe(":8080", nil)
+	// Khởi tạo router
+	r := mux.NewRouter()
+
+	// Định nghĩa API routes
+	r.HandleFunc("/api/register", registerHandler).Methods("POST")
+	r.HandleFunc("/api/login", loginHandler).Methods("POST")
+
+	// Bật CORS Middleware
+	corsHandler := cors.New(cors.Options{
+		AllowedOrigins:   []string{"http://localhost:3000"}, // Cho phép React frontend
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Content-Type", "Authorization"},
+		AllowCredentials: true,
+	})
+
+	// Chạy server với middleware CORS
+	handler := corsHandler.Handler(r)
+	log.Println("Server is running on http://localhost:8080")
+	http.ListenAndServe(":8080", handler)
+	// http.HandleFunc("/api/login", loginHandler)
+	// http.HandleFunc("/api/register", registerHandler)
+
+	// log.Println("Server started at http://localhost:8080")
+	// http.ListenAndServe(":8080", nil)
 }
 
-// Hiển thị form đăng nhập
-func loginForm(w http.ResponseWriter, r *http.Request) {
-	tmpl.ExecuteTemplate(w, "login.html", nil)
-}
-
-// Xử lý đăng nhập
+// Login API
 func loginHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	username := r.FormValue("username")
-	password := r.FormValue("password")
+	var credentials struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	err := json.NewDecoder(r.Body).Decode(&credentials)
+	if err != nil {
+		http.Error(w, "Invalid input", http.StatusBadRequest)
+		return
+	}
 
 	var hashedPassword string
-	err := db.QueryRow("SELECT password FROM users WHERE username = ?", username).Scan(&hashedPassword)
+	err = db.QueryRow("SELECT password FROM users WHERE username = ?", credentials.Username).Scan(&hashedPassword)
 	if err != nil {
 		http.Error(w, "Invalid username or password", http.StatusUnauthorized)
 		return
 	}
 
-	// So sánh mật khẩu
-	err = bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
+	err = bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(credentials.Password))
 	if err != nil {
 		http.Error(w, "Invalid username or password", http.StatusUnauthorized)
 		return
 	}
 
-	fmt.Fprintf(w, "Login successful! Welcome, %s!", username)
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Login successful"})
 }
 
-// Hiển thị form đăng ký
-func registerForm(w http.ResponseWriter, r *http.Request) {
-	tmpl.ExecuteTemplate(w, "register.html", nil)
-}
-
-// Xử lý đăng ký
+// Register API
 func registerHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Redirect(w, r, "/register", http.StatusSeeOther)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	username := r.FormValue("username")
-	password := r.FormValue("password")
+	var user struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	err := json.NewDecoder(r.Body).Decode(&user)
+	if err != nil {
+		http.Error(w, "Invalid input", http.StatusBadRequest)
+		return
+	}
 
-	// Kiểm tra nếu username đã tồn tại
 	var existingUser string
-	err := db.QueryRow("SELECT username FROM users WHERE username = ?", username).Scan(&existingUser)
+	err = db.QueryRow("SELECT username FROM users WHERE username = ?", user.Username).Scan(&existingUser)
 	if err == nil {
 		http.Error(w, "Username already exists", http.StatusConflict)
 		return
 	}
 
-	// Hash mật khẩu
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
 	if err != nil {
 		http.Error(w, "Failed to hash password", http.StatusInternalServerError)
 		return
 	}
 
-	// Lưu thông tin người dùng vào cơ sở dữ liệu
-	_, err = db.Exec("INSERT INTO users (username, password) VALUES (?, ?)", username, hashedPassword)
+	_, err = db.Exec("INSERT INTO users (username, password) VALUES (?, ?)", user.Username, hashedPassword)
 	if err != nil {
 		http.Error(w, "Failed to register user", http.StatusInternalServerError)
 		return
 	}
 
-	fmt.Fprintf(w, "Registration successful! Welcome, %s!", username)
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Registration successful"})
 }
