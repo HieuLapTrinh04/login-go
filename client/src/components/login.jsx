@@ -13,10 +13,18 @@ function Login() {
         username,
         password,
       });
+      console.log("Response data:", response.data); // Kiểm tra response từ API
       setMessage(response.data.message);
+      if (response.data.token) {
+        localStorage.setItem("token", response.data.token); // Lưu token vào localStorage
+        alert("Login success!");
+      } else {
+        alert("Login failed!");
+      }
     } catch (error) {
       setMessage(error.response?.data || "Login failed");
     }
+    
   };
 
   return (
