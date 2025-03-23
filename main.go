@@ -1,18 +1,24 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"strings"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/golang-jwt/jwt"
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
 	"golang.org/x/crypto/bcrypt"
 )
 
 var db *sql.DB
+var jwtKey = []byte("your_secret_key")
 
 func init() {
 	var err error
@@ -43,6 +49,11 @@ func main() {
 		AllowCredentials: true,
 	})
 
+	// Routes cần đăng nhập
+	protectedRoutes := r.PathPrefix("/api").Subrouter()
+	protectedRoutes.Use(authMiddleware)
+	protectedRoutes.HandleFunc("/protected", protectedHandler).Methods("GET")
+
 	// Chạy server với middleware CORS
 	handler := corsHandler.Handler(r)
 	log.Println("Server is running on http://localhost:8080")
@@ -54,9 +65,20 @@ func main() {
 	// http.ListenAndServe(":8080", nil)
 }
 
+func GenerateJWT(username string) (string, error) {
+	secretKey := []byte("your-secret-key") // Đảm bảo có secret key hợp lệ
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"username": username,
+		"exp":      time.Now().Add(time.Hour * 24).Unix(), // Token hết hạn sau 24h
+	})
+
+	return token.SignedString(secretKey) // Trả về token
+}
+
 // Login API
 func loginHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -83,9 +105,18 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid username or password", http.StatusUnauthorized)
 		return
 	}
+	// Tạo token JWT
+	tokenString, err := GenerateJWT(credentials.Username) // Hàm tạo token
+	if err != nil {
+		http.Error(w, "Failed to generate token", http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Println("Generated Token:", tokenString)
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"message": "Login successful"})
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "Login successful", "token": tokenString})
 }
 
 // Register API
@@ -126,4 +157,36 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{"message": "Registration successful"})
+}
+
+func authMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tokenString := r.Header.Get("Authorization")
+		if tokenString == "" {
+			http.Error(w, "Missing token", http.StatusUnauthorized)
+			return
+		}
+
+		// Loại bỏ "Bearer " phía trước token (nếu có)
+		tokenString = strings.TrimPrefix(tokenString, "Bearer ")
+
+		claims := &jwt.StandardClaims{}
+		token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+			return jwtKey, nil
+		})
+
+		if err != nil || !token.Valid {
+			http.Error(w, "Invalid token", http.StatusUnauthorized)
+			return
+		}
+
+		// Lưu username vào context để dùng trong API tiếp theo
+		ctx := context.WithValue(r.Context(), "username", claims.Subject)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func protectedHandler(w http.ResponseWriter, r *http.Request) {
+	username := r.Context().Value("username").(string)
+	fmt.Fprintf(w, "Hello %s, this is a protected route!", username)
 }
